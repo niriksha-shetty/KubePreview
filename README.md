@@ -1,6 +1,6 @@
 # KubePreview — Automated Multi-Tenant Preview Environment Orchestrator
 
-> **Capstone Project**: Automated Multi-Tenant Preview Environment Orchestrator on Kubernetes for MCA Final Year.
+> Automated Multi-Tenant Preview Environment Orchestrator on Kubernetes.
 
 KubePreview is a lightweight, cloud-native control plane and preview environment orchestrator designed to automatically spin up and tear down isolated, dynamic staging environments for every Pull Request in Kubernetes.
 
