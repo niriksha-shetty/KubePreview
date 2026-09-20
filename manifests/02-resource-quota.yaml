@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: preview-quota
+  namespace: pr-__PR_NUMBER__
+  labels:
+    managed-by: kubepreview
+    pr-number: "__PR_NUMBER__"
+spec:
+  hard:
+    requests.cpu: "300m"
+    limits.cpu: "600m"
+    requests.memory: "256Mi"
+    limits.memory: "512Mi"
+    pods: "4"

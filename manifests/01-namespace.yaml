@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pr-__PR_NUMBER__
+  labels:
+    managed-by: kubepreview
+    pr-number: "__PR_NUMBER__"
+  annotations:
+    kubepreview.io/ttl-hours: "2"

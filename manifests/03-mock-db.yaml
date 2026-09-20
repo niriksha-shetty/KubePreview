@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-init-configmap
+  namespace: pr-__PR_NUMBER__
+  labels:
+    managed-by: kubepreview
+    pr-number: "__PR_NUMBER__"
+data:
+  init.sql: |
+    CREATE TABLE IF NOT EXISTS preview_features (
+        id SERIAL PRIMARY KEY,
+        feature_key VARCHAR(100) NOT NULL UNIQUE,
+        feature_name VARCHAR(250) NOT NULL,
+        status VARCHAR(50) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    INSERT INTO preview_features (feature_key, feature_name, status) VALUES
+    ('FEAT-101', 'Multi-Tenant Namespace Isolation & Quotas', 'ACTIVE'),
+    ('FEAT-102', 'Automated Preview Lifecycle & TTL Sweeper', 'PENDING'),
+    ('FEAT-103', 'Dynamic NGINX Ingress Routing via nip.io', 'ACTIVE'),
+    ('FEAT-104', 'Ephemeral PostgreSQL Database Auto-Provisioning', 'ACTIVE'),
+    ('FEAT-105', 'GitLab/GitHub Webhook Pull Request Orchestration', 'PLANNED')
+    ON CONFLICT (feature_key) DO NOTHING;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: pr-__PR_NUMBER__
+  labels:
+    app: postgres
+    managed-by: kubepreview
+    pr-number: "__PR_NUMBER__"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        pr-number: "__PR_NUMBER__"
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: "kubepreview_db"
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
+          value: "postgres_password"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "100Mi"
+          limits:
+            cpu: "200m"
+            memory: "200Mi"
+        volumeMounts:
+        - name: init-sql-vol
+          mountPath: /docker-entrypoint-initdb.d/init.sql
+          subPath: init.sql
+      volumes:
+      - name: init-sql-vol
+        configMap:
+          name: db-init-configmap
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: pr-__PR_NUMBER__
+  labels:
+    app: postgres
+    managed-by: kubepreview
+    pr-number: "__PR_NUMBER__"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgres
+  selector:
+    app: postgres
