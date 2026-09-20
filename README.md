@@ -1,8 +1,8 @@
 # KubePreview — Automated Multi-Tenant Preview Environment Orchestrator
 
-> **Week 1 Milestone**: Foundations, Multi-Tenancy & Parameterized Manifests
+> **Capstone Project**: Automated Multi-Tenant Preview Environment Orchestrator on Kubernetes for MCA Final Year.
 
-KubePreview is a lightweight, cloud-native preview environment orchestrator designed to automatically spin up isolated, dynamic staging environments for every Pull Request in Kubernetes.
+KubePreview is a lightweight, cloud-native control plane and preview environment orchestrator designed to automatically spin up and tear down isolated, dynamic staging environments for every Pull Request in Kubernetes.
 
 ---
 
@@ -12,21 +12,32 @@ KubePreview is a lightweight, cloud-native preview environment orchestrator desi
 Kubepreview/
 ├── cluster/
 │   └── kind-config.yaml         # KinD cluster setup with ingress port mappings (80/443)
-├── sample-app/
-│   ├── app/ (main.py)           # Two-tier Python FastAPI app with exponential DB retry
-│   ├── db/
-│   │   └── init.sql             # PostgreSQL seed script for ephemeral database
-│   ├── Dockerfile               # Non-root container definition
-│   └── requirements.txt         # Python dependencies
-├── manifests/
+├── control-plane/               # Week 2: Automated Control Plane Service
+│   ├── routers/
+│   │   └── webhook.py           # Webhook endpoint (POST /api/v1/webhook) & background tasks
+│   ├── config.py                # Environment configuration (Pydantic BaseSettings)
+│   ├── k8s_manager.py           # Non-blocking Kubernetes SDK orchestrator & rollout waiter
+│   ├── main.py                  # FastAPI application entry point & lifespan hooks
+│   ├── requirements.txt         # Control plane Python dependencies
+│   ├── schemas.py               # Pydantic models for GitHub PR webhooks
+│   └── security.py              # HMAC-SHA256 signature verification (X-Hub-Signature-256)
+├── manifests/                   # Declarative Kubernetes Templates
 │   ├── 01-namespace.yaml        # Tenant namespace with TTL annotations & metadata
 │   ├── 02-resource-quota.yaml   # Hard CPU/Memory/Pod boundaries per tenant
 │   ├── 03-mock-db.yaml          # Ephemeral PostgreSQL Deployment, ConfigMap & Service
 │   ├── 04-app-deployment.yaml   # Sample App Deployment & Service with Downward API
 │   └── 05-ingress.yaml          # NGINX Ingress routing host pr-X.127.0.0.1.nip.io
+├── sample-app/                  # Sample Application Container
+│   ├── app/ (main.py)           # Two-tier Python FastAPI app with exponential DB retry
+│   ├── db/
+│   │   └── init.sql             # PostgreSQL seed script for ephemeral database
+│   ├── Dockerfile               # Non-root container definition
+│   └── requirements.txt         # App Python dependencies
 ├── scripts/
-│   ├── test-deploy.sh           # Automated deployment script for testing PR environments
-│   └── test-teardown.sh         # Cleanup & namespace removal script
+│   ├── simulate-webhook.py      # Local GitHub webhook E2E simulator with HMAC signing
+│   ├── test-deploy.sh           # Week 1 manual test deployment script
+│   └── test-teardown.sh         # Week 1 manual cleanup & namespace removal script
+├── .gitignore                   # Workspace gitignore rules
 └── README.md
 ```
 
@@ -35,39 +46,22 @@ Kubepreview/
 ## ⚡ Quickstart Guide
 
 ### Prerequisites
-Ensure you have the following installed on your host machine:
-- [Docker](https://docs.docker.com/get-docker/)
-- [KinD (Kubernetes in Docker)](https://kind.sigs.k8s.io/)
+- [Docker](https://docs.docker.com/get-docker/) & [KinD](https://kind.sigs.k8s.io/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- Python 3.10+
 
 ---
 
-### Step 1: Create the KinD Cluster
-
-Create the KinD cluster using our custom configuration with extra host port mappings (80 and 443) and control-plane node labels:
+### Step 1: Create the KinD Cluster & Ingress Controller
 
 ```bash
+# Create cluster
 kind create cluster --config cluster/kind-config.yaml
-```
 
-Verify cluster status:
-```bash
-kubectl cluster-info --context kind-kubepreview
-```
-
----
-
-### Step 2: Install NGINX Ingress Controller
-
-Deploy the official NGINX Ingress Controller tailored for KinD:
-
-```bash
+# Deploy NGINX Ingress Controller
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
-```
 
-Wait until the ingress controller pods reach the `Ready` state:
-
-```bash
+# Wait for Ingress Controller readiness
 kubectl wait --namespace ingress-nginx \
   --for=condition=ready pod \
   --selector=app.kubernetes.io/component=controller \
@@ -76,69 +70,54 @@ kubectl wait --namespace ingress-nginx \
 
 ---
 
-### Step 3: Build & Load Sample Application Image
-
-Build the lightweight sample application container:
+### Step 2: Build & Load Sample Application Image
 
 ```bash
 docker build -t kubepreview-sample-app:latest ./sample-app
-```
-
-Load the Docker image directly into the KinD cluster nodes (no external container registry required):
-
-```bash
 kind load docker-image kubepreview-sample-app:latest --name kubepreview
 ```
 
 ---
 
-### Step 4: Deploy a Preview Environment
-
-Run the validation script to spin up an isolated environment for Pull Request `#101`:
+### Step 3: Run the Control Plane Service (Week 2)
 
 ```bash
-# Make scripts executable
-chmod +x scripts/test-deploy.sh scripts/test-teardown.sh
+# Install control plane dependencies
+pip install -r control-plane/requirements.txt
 
-# Deploy PR #101
-./scripts/test-deploy.sh 101
+# Start control plane service
+cd control-plane
+uvicorn main:app --port 8000 --reload
 ```
 
-The script will:
-1. Substitute placeholders into `/tmp/kubepreview-rendered-pr-101`.
-2. Apply the K8s manifests in sequence.
-3. Wait for PostgreSQL and FastAPI pods to become `Ready`.
-4. Output the live preview URL (`http://pr-101.127.0.0.1.nip.io`).
+The control plane starts up on `http://localhost:8000` with live OpenAPI docs at `http://localhost:8000/docs`.
 
 ---
 
-### Step 5: Test the Preview URL
+### Step 4: Simulate Webhook Events (Local E2E Testing)
 
-Open your web browser or run `curl`:
+Open a new terminal and use the test simulator to trigger automated Kubernetes orchestration:
 
+#### Provision / Update Environment:
 ```bash
-curl -H "Host: pr-101.127.0.0.1.nip.io" http://localhost
+# Trigger PR #101 creation
+python scripts/simulate-webhook.py --action opened --pr 101
+
+# Trigger PR #101 synchronization (idempotent patch)
+python scripts/simulate-webhook.py --action synchronize --pr 101
 ```
 
-You will receive an HTML response featuring:
-- **Environment Metadata**: PR ID (`PR #101`), Pod Name, and Namespace (`pr-101`).
-- **Database Query Results**: Seeded records from the ephemeral PostgreSQL instance.
-
----
-
-### Step 6: Teardown & Purge Environment
-
-To delete the preview environment and free up cluster resources:
-
+#### Teardown Environment:
 ```bash
-./scripts/test-teardown.sh 101
+# Trigger PR #101 removal
+python scripts/simulate-webhook.py --action closed --pr 101
 ```
 
 ---
 
-## 🔒 Multi-Tenancy & Security Design
+## 🔒 Security & Architecture Highlights
 
-1. **Namespace Isolation**: Each PR gets a dedicated namespace (`pr-<PR_NUMBER>`) preventing cross-tenant access.
-2. **Hard Resource Quotas**: `02-resource-quota.yaml` prevents noisy-neighbor syndrome by bounding CPU (600m max), Memory (512Mi max), and Pod count (max 4 per namespace).
-3. **Non-Root Execution**: Container specs enforce UID 10001 execution for security compliance.
-4. **Lifecycle & TTL**: Metadata annotations (`kubepreview.io/ttl-hours: "2"`) prepare the cluster for the automated garbage collection controller in upcoming weeks.
+1. **HMAC-SHA256 Payload Verification**: All incoming webhooks are validated against `X-Hub-Signature-256` using constant-time comparison (`hmac.compare_digest`).
+2. **Non-Blocking Async Event Loop**: Heavy Kubernetes API calls and rollout polling (`asyncio.to_thread`) run off-thread to ensure immediate HTTP 200 responses to GitHub (<50ms).
+3. **Multi-Tenant Isolation**: Programmatically creates dedicated namespaces (`pr-<PR_NUMBER>`) with strict `ResourceQuota` limits (CPU, Memory, Pod count).
+4. **Idempotent Reconciliation**: Handles HTTP 409 (`AlreadyExists`) gracefully via dynamic resource patching (`patch_*`) and HTTP 404 cleanly on namespace deletion.
