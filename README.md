@@ -1,6 +1,6 @@
 # KubePreview — Automated Multi-Tenant Preview Environment Orchestrator
 
-> Automated Multi-Tenant Preview Environment Orchestrator on Kubernetes.
+> Automated Multi-Tenant Preview Environment Orchestrator on Kubernetes with GitHub PR Feedback Loop & TTL Reaper.
 
 KubePreview is a lightweight, cloud-native control plane and preview environment orchestrator designed to automatically spin up and tear down isolated, dynamic staging environments for every Pull Request in Kubernetes.
 
@@ -12,14 +12,18 @@ KubePreview is a lightweight, cloud-native control plane and preview environment
 Kubepreview/
 ├── cluster/
 │   └── kind-config.yaml         # KinD cluster setup with ingress port mappings (80/443)
-├── control-plane/               # Week 2: Automated Control Plane Service
+├── control-plane/               # FastAPI Control Plane Service & Orchestrator
 │   ├── routers/
-│   │   └── webhook.py           # Webhook endpoint (POST /api/v1/webhook) & background tasks
-│   ├── config.py                # Environment configuration (Pydantic BaseSettings)
-│   ├── k8s_manager.py           # Non-blocking Kubernetes SDK orchestrator & rollout waiter
-│   ├── main.py                  # FastAPI application entry point & lifespan hooks
+│   │   ├── webhook.py           # Webhook endpoint (POST /api/v1/webhook) & background notification tasks
+│   │   └── previews.py          # Admin Telemetry API endpoint (GET /api/v1/previews)
+│   ├── config.py                # Configuration settings (Pydantic BaseSettings: GITHUB_TOKEN, TTL_HOURS, REAPER_INTERVAL)
+│   ├── formatter.py             # Rich Markdown comment generator with status badges (🟢 🔴 ⚪)
+│   ├── github_client.py         # GitHub REST API client with comment deduplication & mock fallback mode
+│   ├── k8s_manager.py           # Non-blocking Kubernetes SDK orchestrator, rollout waiter & namespace telemetry
+│   ├── main.py                  # FastAPI application entry point, routers & TTL Reaper lifespan hooks
+│   ├── reaper.py                # Asynchronous TTL Reaper Daemon background loop (60s tick)
 │   ├── requirements.txt         # Control plane Python dependencies
-│   ├── schemas.py               # Pydantic models for GitHub PR webhooks
+│   ├── schemas.py               # Pydantic models for GitHub PR webhooks & telemetry payloads
 │   └── security.py              # HMAC-SHA256 signature verification (X-Hub-Signature-256)
 ├── manifests/                   # Declarative Kubernetes Templates
 │   ├── 01-namespace.yaml        # Tenant namespace with TTL annotations & metadata
@@ -34,7 +38,7 @@ Kubepreview/
 │   ├── Dockerfile               # Non-root container definition
 │   └── requirements.txt         # App Python dependencies
 ├── scripts/
-│   ├── simulate-webhook.py      # Local GitHub webhook E2E simulator with HMAC signing
+│   ├── simulate-webhook.py      # Local GitHub webhook E2E simulator & TTL expiration tester (--simulate-ttl-expire)
 │   ├── test-deploy.sh           # Week 1 manual test deployment script
 │   └── test-teardown.sh         # Week 1 manual cleanup & namespace removal script
 ├── .gitignore                   # Workspace gitignore rules
@@ -79,7 +83,7 @@ kind load docker-image kubepreview-sample-app:latest --name kubepreview
 
 ---
 
-### Step 3: Run the Control Plane Service (Week 2)
+### Step 3: Run the Control Plane Service
 
 ```bash
 # Install control plane dependencies
@@ -90,26 +94,39 @@ cd control-plane
 uvicorn main:app --port 8000 --reload
 ```
 
-The control plane starts up on `http://localhost:8000` with live OpenAPI docs at `http://localhost:8000/docs`.
+The control plane starts up on `http://localhost:8000` with live OpenAPI docs at `http://localhost:8000/docs` and starts the **TTL Reaper Daemon** in the background.
 
 ---
 
-### Step 4: Simulate Webhook Events (Local E2E Testing)
+### Step 4: Simulate Webhook Events & TTL Expiration (E2E Testing)
 
-Open a new terminal and use the test simulator to trigger automated Kubernetes orchestration:
+Open a new terminal and use the test simulator to trigger automated Kubernetes orchestration and PR feedback comments:
 
-#### Provision / Update Environment:
+#### 1. Provision / Update Environment:
 ```bash
-# Trigger PR #101 creation
+# Trigger PR #101 creation (provisions namespace & posts 🟢 Ready comment)
 python scripts/simulate-webhook.py --action opened --pr 101
 
 # Trigger PR #101 synchronization (idempotent patch)
 python scripts/simulate-webhook.py --action synchronize --pr 101
 ```
 
-#### Teardown Environment:
+#### 2. Query Telemetry Admin API:
 ```bash
-# Trigger PR #101 removal
+# List all active preview sandboxes & remaining lifetime
+curl http://localhost:8000/api/v1/previews
+```
+
+#### 3. Test TTL Reaper Daemon (Expired Environment Cleanup):
+```bash
+# Set namespace pr-101 creation timestamp to 3 hours ago (exceeds 2h TTL)
+python scripts/simulate-webhook.py --simulate-ttl-expire --pr 101
+```
+*The Reaper Daemon will detect expiration within 60s, purge `pr-101`, and post the 🔴 Expired comment.*
+
+#### 4. Teardown Environment on PR Close:
+```bash
+# Trigger PR #101 removal (deletes namespace & posts ⚪ Terminated comment)
 python scripts/simulate-webhook.py --action closed --pr 101
 ```
 
@@ -118,6 +135,8 @@ python scripts/simulate-webhook.py --action closed --pr 101
 ## 🔒 Security & Architecture Highlights
 
 1. **HMAC-SHA256 Payload Verification**: All incoming webhooks are validated against `X-Hub-Signature-256` using constant-time comparison (`hmac.compare_digest`).
-2. **Non-Blocking Async Event Loop**: Heavy Kubernetes API calls and rollout polling (`asyncio.to_thread`) run off-thread to ensure immediate HTTP 200 responses to GitHub (<50ms).
-3. **Multi-Tenant Isolation**: Programmatically creates dedicated namespaces (`pr-<PR_NUMBER>`) with strict `ResourceQuota` limits (CPU, Memory, Pod count).
-4. **Idempotent Reconciliation**: Handles HTTP 409 (`AlreadyExists`) gracefully via dynamic resource patching (`patch_*`) and HTTP 404 cleanly on namespace deletion.
+2. **GitHub PR Feedback Loop & Deduplication**: Utilizes `httpx.AsyncClient` to update PR comments dynamically using hidden comment markers (`<!-- kubepreview-bot-comment -->`). Falls back gracefully to stdout mock mode when `GITHUB_TOKEN="mock"`.
+3. **Automated TTL Reaper Daemon**: Async background task in FastAPI lifespan startup scanning every 60 seconds to self-destruct expired environments and free cluster capacity.
+4. **Non-Blocking Async Event Loop**: Heavy Kubernetes API calls and rollout polling (`asyncio.to_thread`) run off-thread to ensure immediate HTTP 200 responses to GitHub (<50ms).
+5. **Multi-Tenant Isolation**: Programmatically creates dedicated namespaces (`pr-<PR_NUMBER>`) with strict `ResourceQuota` limits (CPU, Memory, Pod count).
+6. **Idempotent Reconciliation**: Handles HTTP 409 (`AlreadyExists`) gracefully via dynamic resource patching (`patch_*`) and HTTP 404 cleanly on namespace deletion.

@@ -5,7 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 import k8s_manager
-from routers import webhook
+import reaper
+from routers import previews, webhook
 
 # Configure structured logging
 logging.basicConfig(
@@ -20,14 +21,26 @@ logger = logging.getLogger("kubepreview.main")
 async def lifespan(app: FastAPI):
     """Application lifespan context manager for startup and shutdown hooks."""
     logger.info("Starting KubePreview Control Plane Service...")
-    logger.info("Loaded Configuration: BASE_DOMAIN=%s, CLUSTER_IN_CLUSTER=%s, TTL_HOURS=%s", settings.BASE_DOMAIN, settings.CLUSTER_IN_CLUSTER, settings.TTL_HOURS)
+    logger.info(
+        "Loaded Configuration: BASE_DOMAIN=%s, CLUSTER_IN_CLUSTER=%s, TTL_HOURS=%s, REAPER_INTERVAL_SECONDS=%s, GITHUB_TOKEN=%s",
+        settings.BASE_DOMAIN,
+        settings.CLUSTER_IN_CLUSTER,
+        settings.TTL_HOURS,
+        settings.REAPER_INTERVAL_SECONDS,
+        "***" if settings.GITHUB_TOKEN and settings.GITHUB_TOKEN.lower() != "mock" else settings.GITHUB_TOKEN,
+    )
 
     # Initialize Kubernetes client config
     k8s_manager.init_k8s_client()
 
+    # Start TTL Reaper Daemon
+    await reaper.start_ttl_reaper(app)
+
     yield
 
     logger.info("Shutting down KubePreview Control Plane Service...")
+    # Stop TTL Reaper Daemon
+    await reaper.stop_ttl_reaper()
 
 
 app = FastAPI(
@@ -48,6 +61,7 @@ app.add_middleware(
 
 # Register API Routers
 app.include_router(webhook.router, prefix="/api/v1")
+app.include_router(previews.router, prefix="/api/v1")
 
 
 @app.get("/", status_code=status.HTTP_200_OK)

@@ -27,6 +27,12 @@ env/
 venv/
 ENV/
 
+# Kubeconfig & Cluster State Files
+kind-kubeconfig.yaml
+*.kubeconfig
+*.key
+*.crt
+
 # IDE & Editor Configs
 .vscode/
 .idea/

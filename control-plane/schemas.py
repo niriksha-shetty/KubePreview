@@ -33,6 +33,16 @@ class PullRequestEvent(BaseModel):
             return self.pull_request.head.sha[:7]
         return "latest"
 
+    def get_repo_full_name(self) -> str:
+        if self.repository and self.repository.full_name:
+            return self.repository.full_name
+        return "acme/sample-app"
+
+    def get_commit_sha(self) -> str:
+        if self.pull_request and self.pull_request.head and self.pull_request.head.sha:
+            return self.pull_request.head.sha
+        return "latest"
+
 
 class WebhookResponse(BaseModel):
     status: str

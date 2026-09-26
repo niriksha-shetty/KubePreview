@@ -6,13 +6,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Install system libraries needed for PostgreSQL client and health checks
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install python dependencies
+# Copy python dependencies and install pre-built binary wheels (fast & lightweight)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
